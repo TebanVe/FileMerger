@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  file-merger:
+    build: .
+    image: file-merger:latest
+    container_name: file-merger
+    volumes:
+      # Mount your data directory to /app/data in the container
+      - ./Data:/app/data:ro  # Read-only mount
+      # Optional: Mount output directory for results
+      - ./output:/app/output:rw  # Read-write mount
+    environment:
+      - PYTHONUNBUFFERED=1
+    # Override the default command if needed
+    # command: ["python", "src/merge_excel_files.py", "/app/data"]
+    
+    # Resource limits (optional)
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
