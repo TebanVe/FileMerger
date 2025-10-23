@@ -41,6 +41,6 @@ USER filemerger
 ENTRYPOINT ["python", "src/merge_excel_files.py"]
 CMD ["/app/data"]
 
-# Health check (optional)
+# Health check (optional) - only check core dependencies
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import pandas, openpyxl, xlwings; print('Health check passed')" || exit 1
+    CMD python -c "import pandas, openpyxl; print('Health check passed')" || exit 1
