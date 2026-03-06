@@ -189,3 +189,6 @@ merged_files/
 # Docker build artifacts (these don't need to be tracked)
 docker-compose.override.yml
 .dockerignore.local
+
+# Cursor plans
+structure_validation_before_merge.plan.md
