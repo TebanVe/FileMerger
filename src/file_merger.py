@@ -5,26 +5,51 @@ This module contains the core logic for merging Excel and CSV files from subdire
 """
 
 import os
+import re
+import sys
 import glob
 import pandas as pd
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional
 
+try:
+    from .structure_validator import (
+        validate_column_structure,
+        format_validation_report,
+        StructureValidationResult,
+        file_has_plural_singular_conflict,
+        compute_canonical_plural_singular_renames,
+    )
+except ImportError:
+    from structure_validator import (
+        validate_column_structure,
+        format_validation_report,
+        StructureValidationResult,
+        file_has_plural_singular_conflict,
+        compute_canonical_plural_singular_renames,
+    )
+
 
 class FileMerger:
     """Handles merging of Excel and CSV files within subdirectories."""
     
-    def __init__(self, root_directory: str, clean_columns: bool = True, 
-                 column_cleaning_options: Dict[str, bool] = None):
+    def __init__(self, root_directory: str, clean_columns: bool = True,
+                 column_cleaning_options: Dict[str, bool] = None,
+                 validate_structure: bool = True,
+                 columns_to_export: Optional[List[str]] = None):
         """
         Initialize the Excel merger.
-        
+
         Args:
             root_directory: Path to the root directory containing subdirectories
             clean_columns: Whether to clean column names
             column_cleaning_options: Dictionary of cleaning options
+            validate_structure: If True, validate column structure before merge and fail on mismatch
+            columns_to_export: If set, only these columns are read and exported (from YAML or CLI)
         """
         self.root_directory = Path(root_directory)
+        self.validate_structure = validate_structure
+        self.columns_to_export = columns_to_export
         self.processed_subdirs = 0
         self.total_files_merged = 0
         self.skipped_single_file = 0
@@ -37,7 +62,8 @@ class FileMerger:
             'normalize_spaces': True,
             'lowercase': False,
             'remove_special_chars': False,
-            'handle_common_variations': True
+            'handle_common_variations': True,
+            'normalize_plural_singular': False  # Off by default; only validation reports plural/singular hints
         }
         
         # Update with user-provided options
@@ -104,6 +130,21 @@ class FileMerger:
         else:
             return 'unknown'
     
+    def _to_singular(self, name: str) -> str:
+        """
+        Simple heuristic: plural form to singular (for column name normalization).
+        Only used when normalize_plural_singular is enabled; does not handle all English plurals.
+        """
+        if not name or len(name) < 2:
+            return name
+        if name.endswith('ies') and len(name) > 3:
+            return name[:-3] + 'y'
+        if name.endswith('es') and len(name) > 2:
+            return name[:-2]
+        if name.endswith('s') and len(name) > 1:
+            return name[:-1]
+        return name
+
     def clean_column_names(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Clean column names in a DataFrame.
@@ -116,8 +157,9 @@ class FileMerger:
         """
         if not self.clean_columns or df.empty:
             return df
-            
+
         original_columns = df.columns.tolist()
+        original_set = set(original_columns)
         cleaned_columns = []
         
         for col in original_columns:
@@ -129,7 +171,6 @@ class FileMerger:
             
             # Normalize multiple spaces to single space
             if self.column_cleaning_options.get('normalize_spaces', True):
-                import re
                 cleaned_col = re.sub(r'\s+', ' ', cleaned_col)
             
             # Convert to lowercase
@@ -138,7 +179,6 @@ class FileMerger:
             
             # Remove special characters
             if self.column_cleaning_options.get('remove_special_chars', False):
-                import re
                 cleaned_col = re.sub(r'[^\w\s-]', '', cleaned_col)
             
             # Handle common variations
@@ -162,6 +202,12 @@ class FileMerger:
                     if cleaned_col.lower() == old.lower():
                         cleaned_col = new
                         break
+            
+            # Normalize plural to singular only when singular is not already a column (avoid collapsing)
+            if self.column_cleaning_options.get('normalize_plural_singular', True):
+                singular = self._to_singular(cleaned_col)
+                if singular != cleaned_col and singular not in original_set:
+                    cleaned_col = singular
             
             cleaned_columns.append(cleaned_col)
         
@@ -400,6 +446,18 @@ class FileMerger:
             except Exception:
                 return None
     
+    def _merge_two_columns_into_one(
+        self, df: pd.DataFrame, col_a: str, col_b: str, keep_name: str
+    ) -> pd.DataFrame:
+        """Merge two columns (e.g. Brand and Brands) into one; keep keep_name, coalesce values, drop the other."""
+        other = col_b if keep_name == col_a else col_a
+        if keep_name not in df.columns or other not in df.columns:
+            return df
+        out = df.copy()
+        out[keep_name] = out[keep_name].fillna(out[other])
+        out = out.drop(columns=[other])
+        return out
+
     def merge_dataframes(self, dataframes: List[pd.DataFrame]) -> pd.DataFrame:
         """
         Merge multiple DataFrames, handling column mismatches.
@@ -446,20 +504,128 @@ class FileMerger:
             self.skipped_single_file += 1
             return True
         
-        # Read all supported files
+        # Read all supported files (column cleaning is applied during read)
         dataframes = []
+        file_paths_read = []
         for file_path in supported_files:
             df, method_used = self.read_file_with_method(file_path)
             if df is not None:
                 dataframes.append(df)
+                file_paths_read.append(file_path)
                 print(f"    ✓ Read {file_path.name} ({len(df)} rows, {len(df.columns)} columns) using {method_used}")
             else:
                 print(f"    ✗ Failed to read {file_path.name}")
-        
+
         if not dataframes:
             print(f"  No valid files to merge in {subdir_path.name}")
             return False
-            
+
+        # Use reference per subfolder: the file with the most columns in this subfolder
+        if len(dataframes) > 1:
+            max_col_idx = max(range(len(dataframes)), key=lambda i: len(dataframes[i].columns))
+            if max_col_idx != 0:
+                file_paths_read[0], file_paths_read[max_col_idx] = file_paths_read[max_col_idx], file_paths_read[0]
+                dataframes[0], dataframes[max_col_idx] = dataframes[max_col_idx], dataframes[0]
+                print(f"  ℹ️  Reference for this subfolder: {file_paths_read[0].name} ({len(dataframes[0].columns)} columns)")
+
+        # Resolve same-file plural/singular conflicts (e.g. file has both "Brand" and "Brands")
+        if self.validate_structure and len(dataframes) > 1:
+            while True:
+                conflict_file_idx = None
+                conflict_pair = None
+                for i, df in enumerate(dataframes):
+                    pair = file_has_plural_singular_conflict(df.columns.tolist())
+                    if pair is not None:
+                        conflict_file_idx = i
+                        conflict_pair = pair
+                        break
+                if conflict_file_idx is None:
+                    break
+                path = file_paths_read[conflict_file_idx]
+                col_a, col_b = conflict_pair
+                print(f"  ⚠️  File has both '{col_a}' and '{col_b}': {path.name}")
+                if not sys.stdin.isatty():
+                    self.errors.append(
+                        f"Same-file column conflict in {path.name} (both '{col_a}' and '{col_b}'). "
+                        "Run interactively to choose which to keep, or fix the file manually."
+                    )
+                    return False
+                while True:
+                    try:
+                        choice = input(
+                            f"    Which name should we keep? (1) {col_a}  (2) {col_b}  (3) Abort [1/2/3]: "
+                        ).strip() or "3"
+                        if choice == "3":
+                            self.errors.append(
+                                f"User aborted: same-file column conflict in {path.name}"
+                            )
+                            return False
+                        if choice == "1":
+                            keep_name = col_a
+                            break
+                        if choice == "2":
+                            keep_name = col_b
+                            break
+                    except EOFError:
+                        self.errors.append(
+                            f"Aborted (no input): same-file column conflict in {path.name}"
+                        )
+                        return False
+                dataframes[conflict_file_idx] = self._merge_two_columns_into_one(
+                    dataframes[conflict_file_idx], col_a, col_b, keep_name
+                )
+                print(f"    ✓ Merged columns into '{keep_name}'")
+
+            # Apply cross-file plural/singular correction (majority wins)
+            renames = compute_canonical_plural_singular_renames(
+                [df.columns.tolist() for df in dataframes]
+            )
+            if renames:
+                for i, df in enumerate(dataframes):
+                    apply = {k: v for k, v in renames.items() if k in df.columns}
+                    if apply:
+                        dataframes[i] = df.rename(columns=apply)
+                        print(f"    ✓ Normalized column names (plural/singular): {list(apply.keys())} → canonical")
+
+            # Validate column structure after corrections (allow_missing_columns: merge leaves them blank)
+            result = validate_column_structure(
+                file_paths_read, dataframes, allow_missing_columns=True
+            )
+            if not result.success:
+                self.errors.append(
+                    f"Structure validation failed for subdirectory {subdir_path.name}"
+                )
+                print(f"  ✗ Column structure mismatch (merge skipped)")
+                print(format_validation_report(result))
+                return False
+
+        # Warn when any file has columns not in the reference (extra columns in merged file)
+        if len(dataframes) > 1:
+            reference_set = set(dataframes[0].columns)
+            extra_to_files: Dict[str, List[str]] = {}
+            for i, df in enumerate(dataframes):
+                for col in df.columns:
+                    if col not in reference_set:
+                        extra_to_files.setdefault(col, []).append(file_paths_read[i].name)
+            if extra_to_files:
+                print(f"  ⚠️  Extra columns (not in reference) – please verify they are not typos:")
+                for col in sorted(extra_to_files.keys()):
+                    files_str = ", ".join(extra_to_files[col])
+                    print(f"      Column \"{col}\": in files: [{files_str}]")
+
+        # Restrict to columns_to_export when provided (e.g. from --use-columns and YAML)
+        if self.columns_to_export is not None:
+            for i in range(len(dataframes)):
+                dataframes[i] = dataframes[i].reindex(columns=self.columns_to_export)
+            in_any = set()
+            for df in dataframes:
+                for c in self.columns_to_export:
+                    if c in df.columns and df[c].notna().any():
+                        in_any.add(c)
+            missing = set(self.columns_to_export) - in_any
+            if missing:
+                print(f"  ⚠️  Requested columns not present in any file: {sorted(missing)}")
+
         # Merge the dataframes
         merged_df = self.merge_dataframes(dataframes)
         

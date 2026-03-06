@@ -1,5 +1,6 @@
 pandas==2.3.3
 openpyxl==3.1.5
+pyyaml>=6.0
 xlrd==2.0.2
 xlwings==0.33.16
 numpy==2.3.4
