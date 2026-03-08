@@ -1,0 +1,66 @@
+# Example columns configuration for --use-columns
+# Copy to columns.yaml and edit the list. Column names must match after cleaning.
+# Only these columns will be read and exported when you run:
+#   python src/merge_excel_files.py ./Data --use-columns
+#   python src/merge_excel_files.py ./Data --use-columns --columns-file my_columns.yaml
+#
+# Optional global settings:
+#   large_file_threshold_mb: 50   # Use chunked/streaming read for files >= this size (MB)
+#   subdir_include: [SubdirA, SubdirB]   # Only process these subdirectories
+#   subdir_exclude: [SkipMe]             # Skip these subdirectories
+#
+# Pivot/aggregate (when merged rows exceed max_rows_before_aggregate):
+#   group_by: [Campaign name, Account name]
+#   max_rows_before_aggregate: 100000
+#   aggregate_columns:   # value columns and operation (sum, mean, count, first, last, min, max, median, std)
+#     Impressions: sum
+#     "Media Cost (Advertiser Currency)": sum
+#
+# Sort merged output before save (e.g. largest Media Cost first):
+#   sort_by: ["Media Cost (Advertiser Currency)"]
+#   sort_ascending: false   # false = descending (largest first), true = ascending
+#
+# Optional per-subdirectory overrides (subdir name -> options):
+# subdirectories:
+#   SubdirName:
+#     columns: [Col1, Col2]
+#     group_by: [Col1]
+#     max_rows_before_aggregate: 50000
+#     aggregate_columns: { Impressions: sum, Clicks: sum }
+#     sort_by: [Col1]
+#     sort_ascending: false
+#
+# Column name normalization (so different files can use different names for the same concept):
+#   column_aliases:       variant name -> canonical name (exact match after cleaning)
+#     "Media Cost (USD)": "Media Cost"
+#     "Media Cost (Advertiser Currency)": "Media Cost"
+#   column_canonical_patterns:  one rule covers many variants like "Name (anything)"
+#     - { base: "Media Cost", canonical: "Media Cost" }   # "Media Cost (USD)", "Media Cost (Advertiser Currency)" -> "Media Cost"
+
+
+subdir_include: [Walmart]
+
+columns:
+  - Advertiser
+  - Seller Domain
+  - Impressions
+  - Clicks
+  - "Media Cost (Adv Currency)"
+
+group_by: ["Advertiser", "Seller Domain"]
+max_rows_before_aggregate: 1000000
+aggregate_columns:
+  Impressions: sum
+  Clicks: sum
+  "Media Cost (Adv Currency)": sum
+
+sort_by: ["Media Cost (Adv Currency)"]
+sort_ascending: false
+
+use_column_aliases: false
+
+column_aliases:
+  "Media Cost (USD)": "Media Cost"
+  "Media Cost (Advertiser Currency)": "Media Cost"
+
+
