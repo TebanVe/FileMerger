@@ -7,10 +7,15 @@ No modifications to existing src/ code; this app only imports from it.
 import sys
 from pathlib import Path
 
-# Ensure repo root is on path so we can import src
+# Ensure repo root is first on path so "app" is the package (not this file)
 ROOT = Path(__file__).resolve().parent.parent
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+ROOT_STR = str(ROOT)
+SCRIPT_DIR = str(Path(__file__).resolve().parent)
+if ROOT_STR in sys.path:
+    sys.path.remove(ROOT_STR)
+sys.path.insert(0, ROOT_STR)
+if SCRIPT_DIR in sys.path:
+    sys.path.remove(SCRIPT_DIR)
 
 import streamlit as st
 
