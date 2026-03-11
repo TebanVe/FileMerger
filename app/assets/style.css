@@ -1,0 +1,19 @@
+/* Dashboard-style polish for the Streamlit app (optional). */
+
+/* Sidebar: light grey background, subtle separation */
+[data-testid="stSidebar"] {
+  background-color: #f5f5f5;
+}
+
+/* Metric/card blocks: rounded corners, slight shadow */
+[data-testid="stMetric"] {
+  background-color: #fff;
+  padding: 1rem;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+
+/* Primary buttons: accent color (optional override) */
+.stButton > button[kind="primary"] {
+  border-radius: 6px;
+}
